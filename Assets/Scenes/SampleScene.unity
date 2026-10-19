@@ -892,7 +892,7 @@ LineRenderer:
   m_RenderingLayerMask: 1
   m_RendererPriority: 0
   m_Materials:
-  - {fileID: 0}
+  - {fileID: 10306, guid: 0000000000000000f000000000000000, type: 0}
   m_StaticBatchInfo:
     firstSubMesh: 0
     subMeshCount: 0
@@ -2019,7 +2019,7 @@ Transform:
   m_GameObject: {fileID: 1198742637}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalPosition: {x: 0, y: 0, z: 1.51}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -2060,6 +2060,8 @@ MonoBehaviour:
   reverseSpeed: 40
   turnSpeed: 100
   gravityForce: 20
+  steeringForce: 5
+  minTurnSpeed: 0.5
   groundLayer:
     serializedVersion: 2
     m_Bits: 16
