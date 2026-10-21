@@ -1,12 +1,31 @@
-
 using UnityEngine;
 using UnityEngine.InputSystem;
 
 public class SphereMotorController : MonoBehaviour
 {
+    public static SphereMotorController Instance { get; private set; }
+
     [Header("References")]
     public Rigidbody sphereRB;
     public Transform motorModel;
+
+    [Header("Passenger / Boncengan Settings")]
+    [Tooltip("Titik / Transform tempat duduk penumpang. Jika kosong, bisa diisi manual atau otomatis menggunakan passengerOffset.")]
+    public Transform passengerSeatPoint;
+
+    [Tooltip("Offset posisi penumpang jika passengerSeatPoint tidak ditentukan (X: samping, Y: tinggi, Z: maju/mundur).")]
+    public Vector3 passengerOffset = new Vector3(0f, 1.1f, -0.6f);
+
+    [Tooltip("Rotasi lokal penumpang saat duduk di motor (derajat).")]
+    public Vector3 passengerRotation = Vector3.zero;
+
+    [Tooltip("Aktifkan jika ingin mengubah ukuran (scale) NPC saat naik motor.")]
+    public bool customPassengerScale = false;
+
+    [Tooltip("Ukuran lokal penumpang jika customPassengerScale dicentang.")]
+    public Vector3 passengerScale = Vector3.one;
+
+    private GameObject currentPassenger;
 
     [Header("Movement Settings")]
     public float forwardSpeed = 80f;
@@ -28,6 +47,11 @@ public class SphereMotorController : MonoBehaviour
     private float moveInput;
     private float turnInput;
     private bool isGrounded;
+
+    private void Awake()
+    {
+        Instance = this;
+    }
 
     private void Start()
     {
@@ -185,5 +209,104 @@ public class SphereMotorController : MonoBehaviour
             velocity.y,
             newVelocity.z
         );
+    }
+
+    /// <summary>
+    /// Mendapatkan titik boncengan penumpang. Jika belum ada, akan mencari child PassengerSeat atau membuatnya otomatis.
+    /// </summary>
+    public Transform GetPassengerSeat()
+    {
+        if (passengerSeatPoint != null)
+            return passengerSeatPoint;
+
+        Transform parentTransform = motorModel != null ? motorModel : transform;
+
+        // Cari apakah sudah ada child bernama "PassengerSeat"
+        Transform existingSeat = parentTransform.Find("PassengerSeat");
+        if (existingSeat != null)
+        {
+            passengerSeatPoint = existingSeat;
+            return passengerSeatPoint;
+        }
+
+        // Buat GameObject tempat duduk otomatis jika belum ada
+        GameObject seatObj = new GameObject("PassengerSeat");
+        seatObj.transform.SetParent(parentTransform);
+        seatObj.transform.localPosition = passengerOffset;
+        seatObj.transform.localRotation = Quaternion.Euler(passengerRotation);
+        passengerSeatPoint = seatObj.transform;
+
+        return passengerSeatPoint;
+    }
+
+    /// <summary>
+    /// Menaikkan NPC ke jok belakang motor.
+    /// </summary>
+    public void NaikkanPenumpang(GameObject npc)
+    {
+        if (npc == null) return;
+
+        currentPassenger = npc;
+
+        // 1. Nonaktifkan semua collider pada NPC agar tidak berbenturan atau memicu trigger saat berkendara
+        Collider[] colliders = npc.GetComponentsInChildren<Collider>();
+        foreach (Collider col in colliders)
+        {
+            col.enabled = false;
+        }
+
+        // 2. Nonaktifkan Rigidbody jika ada agar tidak bentrok dengan pergerakan motor
+        Rigidbody rb = npc.GetComponent<Rigidbody>();
+        if (rb != null)
+        {
+            rb.isKinematic = true;
+            rb.linearVelocity = Vector3.zero;
+            rb.angularVelocity = Vector3.zero;
+        }
+
+        // 3. Nonaktifkan script PickUpTrigger agar tidak dapat dijemput berulang kali
+        PickUpTrigger pickUp = npc.GetComponent<PickUpTrigger>();
+        if (pickUp != null)
+        {
+            pickUp.enabled = false;
+        }
+
+        // 4. Pasang NPC sebagai anak (child) dari titik tempat duduk motor
+        Transform seat = GetPassengerSeat();
+        npc.transform.SetParent(seat);
+        npc.transform.localPosition = Vector3.zero;
+        npc.transform.localRotation = Quaternion.identity;
+
+        // 5. Atur ukuran jika customPassengerScale diaktifkan
+        if (customPassengerScale)
+        {
+            npc.transform.localScale = passengerScale;
+        }
+
+        Debug.Log($"Penumpang [{npc.name}] berhasil naik ke motor di boncengan!");
+    }
+
+    /// <summary>
+    /// Menurunkan penumpang dari motor.
+    /// </summary>
+    public void TurunkanPenumpang()
+    {
+        currentPassenger = null;
+    }
+
+    private void OnDrawGizmosSelected()
+    {
+        Transform parentTransform = motorModel != null ? motorModel : transform;
+        Vector3 seatPos = passengerSeatPoint != null 
+            ? passengerSeatPoint.position 
+            : parentTransform.TransformPoint(passengerOffset);
+
+        Gizmos.color = Color.yellow;
+        Gizmos.DrawWireSphere(seatPos, 0.25f);
+        Gizmos.color = Color.cyan;
+        Vector3 forwardDir = passengerSeatPoint != null 
+            ? passengerSeatPoint.forward 
+            : parentTransform.forward;
+        Gizmos.DrawRay(seatPos, forwardDir * 0.5f);
     }
 }
