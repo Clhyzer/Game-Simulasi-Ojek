@@ -19,6 +19,16 @@ public class PhoneOjekApp : MonoBehaviour
     public Button btnTerimaOrder;
     public Button btnSelesaiOrder;
 
+    [Header("Sound Effect")]
+    [Tooltip("Boleh dikosongkan, akan dibuat otomatis jika tidak ada.")]
+    public AudioSource audioSource;
+    public AudioClip sfxOrderanMasuk;
+    [Tooltip("Dimainkan saat orderan selesai di drop zone.")]
+    public AudioClip sfxOrderanSelesai;
+    [Tooltip("Opsional: dimainkan saat orderan diselesaikan bukan di drop zone.")]
+    public AudioClip sfxOrderanGagal;
+    [Range(0f, 1f)] public float volumeSfx = 1f;
+
     [Header("Sistem Keuangan (2 Point)")]
     [Tooltip("Point 1: Saldo yang masuk ke rekening di HP saat pesanan selesai.")]
     public int saldoAplikasi = 0;
@@ -69,6 +79,25 @@ public class PhoneOjekApp : MonoBehaviour
     [Tooltip("Persentase tambahan dari tarif orderan yang juga dipotong (0.50 = 50% dari tarif awal).")]
     public float penaltiPersenTarif = 0.50f;
 
+    [Header("Laporan Pendapatan Harian")]
+    [Tooltip("Boleh dikosongkan, panel dibuat otomatis.")]
+    public GameObject panelLaporanHarian;
+    public TMP_Text textLaporanHarian;
+    public Button btnTutupLaporan;
+    [Tooltip("Pause game saat laporan tampil.")]
+    public bool pauseSaatLaporan = true;
+
+    // Kunci PlayerPrefs
+    private const string KeySaldoAplikasi = "Ojek_SaldoAplikasi";
+    private const string KeyUangUtama = "Ojek_UangUtamaPlayer";
+
+    // Statistik hari ini
+    private int orderSelesaiHariIni = 0;
+    private int orderGagalHariIni = 0;
+    private int pendapatanHariIni = 0;   // total tarif yang masuk (sudah dipotong denda telat)
+    private int totalDendaHariIni = 0;   // total potongan karena telat
+    private int totalPenaltiHariIni = 0; // total penalti bukan di drop zone
+
     // Status order berjalan
     private bool isSearching = false;
     private bool isBusy = false;
@@ -81,10 +110,49 @@ public class PhoneOjekApp : MonoBehaviour
     private float batasWaktuOrder = 0f;
     private float sisaWaktu = 0f;
 
+    // BARU: penanda data sudah dimuat, supaya tidak menimpa data lama dengan nilai kosong
+    private bool dataSudahDimuat = false;
+
     void Awake()
     {
         Instance = this;
+
+        // Siapkan AudioSource otomatis jika belum dipasang
+        if (audioSource == null)
+        {
+            audioSource = GetComponent<AudioSource>();
+            if (audioSource == null) audioSource = gameObject.AddComponent<AudioSource>();
+            audioSource.playOnAwake = false;
+            audioSource.spatialBlend = 0f; // 2D sound, tidak terpengaruh jarak
+        }
+
         MuatDataKeuangan();
+    }
+
+    void OnEnable()
+    {
+        DayCycle.OnLaporanHarian += TampilkanLaporanHarian;
+        DayCycle.OnHariBaru += OnHariBaru;
+    }
+
+    void OnDisable()
+    {
+        DayCycle.OnLaporanHarian -= TampilkanLaporanHarian;
+        DayCycle.OnHariBaru -= OnHariBaru;
+        SimpanDataKeuangan(); // BARU: simpan saat objek dimatikan / scene berganti
+        if (pauseSaatLaporan) Time.timeScale = 1f;
+    }
+
+    // BARU: jaring pengaman penyimpanan
+    void OnApplicationQuit()
+    {
+        SimpanDataKeuangan();
+    }
+
+    // BARU: penting untuk Android / saat aplikasi dikecilkan
+    void OnApplicationPause(bool pause)
+    {
+        if (pause) SimpanDataKeuangan();
     }
 
     void Start()
@@ -96,6 +164,9 @@ public class PhoneOjekApp : MonoBehaviour
 
         // Inisialisasi UI Keuangan & Binding Teks
         InisialisasiUIKeuanganOtomatis();
+
+        // Siapkan panel laporan harian
+        SiapkanPanelLaporan();
 
         // Sembunyikan panel-panel di awal & perbarui tampilan saldo
         ResetUI();
@@ -192,6 +263,7 @@ public class PhoneOjekApp : MonoBehaviour
             UpdateTampilanPopupOrder();
 
             panelPopupOrder.SetActive(true); // Munculkan Pop-up
+            MainkanSFX(sfxOrderanMasuk);     // Bunyi orderan masuk
         }
     }
 
@@ -240,8 +312,15 @@ public class PhoneOjekApp : MonoBehaviour
             // === BERHASIL: Player di titik drop zone ===
             int uangDiterima = tarifAkhir;
             saldoAplikasi += uangDiterima;
+
+            // Catat statistik harian
+            orderSelesaiHariIni++;
+            pendapatanHariIni += uangDiterima;
+            totalDendaHariIni += denda;
+
             SimpanDataKeuangan();
             UpdateTampilanSaldo();
+            MainkanSFX(sfxOrderanSelesai);
 
             if (denda > 0)
             {
@@ -258,6 +337,11 @@ public class PhoneOjekApp : MonoBehaviour
         {
             // === GAGAL: Player BUKAN di titik drop zone ===
             int totalPenalti = penaltiTidakDiDrop + Mathf.RoundToInt(tarifAwal * penaltiPersenTarif);
+
+            // Catat statistik harian
+            orderGagalHariIni++;
+            totalPenaltiHariIni += totalPenalti;
+
             saldoAplikasi -= totalPenalti;
 
             // Jika saldo aplikasi minus, potong dari uang utama
@@ -270,6 +354,7 @@ public class PhoneOjekApp : MonoBehaviour
 
             SimpanDataKeuangan();
             UpdateTampilanSaldo();
+            MainkanSFX(sfxOrderanGagal);
 
             textStatus.text = $"ORDERAN DIBATALKAN! -Rp {totalPenalti:N0}";
             Debug.Log($"[OJOL] Orderan diselesaikan BUKAN di Drop Zone! Penalti: Rp {totalPenalti:N0} (Tetap: Rp {penaltiTidakDiDrop:N0} + {penaltiPersenTarif * 100f:F0}% tarif)");
@@ -340,6 +425,43 @@ public class PhoneOjekApp : MonoBehaviour
         }
     }
 
+    // --- API UANG UNTUK SKRIP LAIN (toko, bensin, dll.) ---
+
+    /// <summary>
+    /// Kurangi uang utama player dan langsung simpan.
+    /// Mengembalikan false jika uang tidak cukup.
+    /// </summary>
+    public bool KurangiUangUtama(int jumlah)
+    {
+        if (jumlah < 0) return false;
+        if (uangUtamaPlayer < jumlah) return false;
+
+        uangUtamaPlayer -= jumlah;
+        SimpanDataKeuangan();
+        UpdateTampilanSaldo();
+        return true;
+    }
+
+    /// <summary>
+    /// Tambah uang utama player dan langsung simpan.
+    /// </summary>
+    public void TambahUangUtama(int jumlah)
+    {
+        if (jumlah <= 0) return;
+
+        uangUtamaPlayer += jumlah;
+        SimpanDataKeuangan();
+        UpdateTampilanSaldo();
+    }
+
+    // --- SOUND EFFECT ---
+
+    void MainkanSFX(AudioClip clip)
+    {
+        if (clip == null || audioSource == null) return;
+        audioSource.PlayOneShot(clip, volumeSfx);
+    }
+
     // --- FORMULA KALKULASI ---
 
     int HitungTarif(float jarak)
@@ -356,6 +478,132 @@ public class PhoneOjekApp : MonoBehaviour
     {
         float durasi = waktuDasar + (jarak / Mathf.Max(1f, kecepatanEstimasi));
         return Mathf.Max(10f, Mathf.Round(durasi));
+    }
+
+    // --- LAPORAN HARIAN ---
+
+    void TampilkanLaporanHarian(int hariKe)
+    {
+        int bersih = pendapatanHariIni - totalPenaltiHariIni;
+        string warnaBersih = bersih >= 0 ? "#33F273" : "#FF5555";
+
+        if (textLaporanHarian != null)
+        {
+            textLaporanHarian.text =
+                $"<b>LAPORAN PENDAPATAN - HARI {hariKe}</b>\n\n" +
+                $"Orderan Selesai : {orderSelesaiHariIni}\n" +
+                $"Orderan Gagal   : {orderGagalHariIni}\n\n" +
+                $"Pendapatan      : Rp {pendapatanHariIni:N0}\n" +
+                $"<size=80%><color=#FFD84D>(Potongan telat: Rp {totalDendaHariIni:N0})</color></size>\n" +
+                $"Penalti         : <color=#FF5555>-Rp {totalPenaltiHariIni:N0}</color>\n\n" +
+                $"<b>Total Bersih : <color={warnaBersih}>Rp {bersih:N0}</color></b>";
+        }
+
+        if (panelLaporanHarian != null) panelLaporanHarian.SetActive(true);
+        if (pauseSaatLaporan) Time.timeScale = 0f;
+    }
+
+    void TutupLaporanHarian()
+    {
+        if (panelLaporanHarian != null) panelLaporanHarian.SetActive(false);
+        if (pauseSaatLaporan) Time.timeScale = 1f;
+
+        // Mulai hari berikutnya (jam kembali ke jam mulai, nomor hari +1)
+        if (DayCycle.Instance != null) DayCycle.Instance.MulaiHariBaru();
+    }
+
+    void OnHariBaru(int hariKe)
+    {
+        // Reset statistik untuk hari yang baru
+        orderSelesaiHariIni = 0;
+        orderGagalHariIni = 0;
+        pendapatanHariIni = 0;
+        totalDendaHariIni = 0;
+        totalPenaltiHariIni = 0;
+
+        // Reset status orderan yang masih berjalan (uang & saldo TIDAK diubah)
+        CancelInvoke();
+        isBusy = false;
+        isSearching = false;
+        isDelivering = false;
+        denda = 0;
+
+        if (panelPopupOrder != null) panelPopupOrder.SetActive(false);
+        if (panelDalamOrderan != null) panelDalamOrderan.SetActive(false);
+        if (toggleOnOff != null) toggleOnOff.SetIsOnWithoutNotify(false);
+        if (textStatus != null) textStatus.text = "Status: OFF";
+
+        if (NPCSpawner.Instance != null) NPCSpawner.Instance.HapusSemuaJob();
+
+        UpdateTampilanSaldo();
+    }
+
+    void SiapkanPanelLaporan()
+    {
+        // Buat panel otomatis jika belum ada
+        if (panelLaporanHarian == null)
+        {
+            Canvas canvas = GetComponentInParent<Canvas>();
+            if (canvas == null) canvas = Object.FindFirstObjectByType<Canvas>();
+            if (canvas == null) return;
+
+            TMP_FontAsset fontAsset = textStatus != null ? textStatus.font : TMP_Settings.defaultFontAsset;
+
+            panelLaporanHarian = new GameObject("PanelLaporanHarian", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
+            panelLaporanHarian.transform.SetParent(canvas.transform, false);
+            RectTransform pr = panelLaporanHarian.GetComponent<RectTransform>();
+            pr.anchorMin = pr.anchorMax = pr.pivot = new Vector2(0.5f, 0.5f);
+            pr.anchoredPosition = Vector2.zero;
+            pr.sizeDelta = new Vector2(420f, 330f);
+            panelLaporanHarian.GetComponent<Image>().color = new Color(0.08f, 0.10f, 0.14f, 0.97f);
+
+            // Teks laporan
+            GameObject txtObj = new GameObject("TextLaporan", typeof(RectTransform), typeof(CanvasRenderer), typeof(TextMeshProUGUI));
+            txtObj.transform.SetParent(panelLaporanHarian.transform, false);
+            RectTransform tr = txtObj.GetComponent<RectTransform>();
+            tr.anchorMin = Vector2.zero;
+            tr.anchorMax = Vector2.one;
+            tr.offsetMin = new Vector2(20f, 60f);
+            tr.offsetMax = new Vector2(-20f, -15f);
+            TextMeshProUGUI tmp = txtObj.GetComponent<TextMeshProUGUI>();
+            if (fontAsset != null) tmp.font = fontAsset;
+            tmp.fontSize = 20;
+            tmp.color = Color.white;
+            tmp.alignment = TextAlignmentOptions.TopLeft;
+            textLaporanHarian = tmp;
+
+            // Tombol tutup
+            GameObject btnObj = new GameObject("BtnTutupLaporan", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(Button));
+            btnObj.transform.SetParent(panelLaporanHarian.transform, false);
+            RectTransform br = btnObj.GetComponent<RectTransform>();
+            br.anchorMin = br.anchorMax = br.pivot = new Vector2(0.5f, 0f);
+            br.anchoredPosition = new Vector2(0f, 15f);
+            br.sizeDelta = new Vector2(160f, 36f);
+            btnObj.GetComponent<Image>().color = new Color(0.15f, 0.65f, 0.35f, 1f);
+            btnTutupLaporan = btnObj.GetComponent<Button>();
+
+            GameObject btnTxtObj = new GameObject("TextBtn", typeof(RectTransform), typeof(CanvasRenderer), typeof(TextMeshProUGUI));
+            btnTxtObj.transform.SetParent(btnObj.transform, false);
+            RectTransform btr = btnTxtObj.GetComponent<RectTransform>();
+            btr.anchorMin = Vector2.zero;
+            btr.anchorMax = Vector2.one;
+            btr.offsetMin = btr.offsetMax = Vector2.zero;
+            TextMeshProUGUI btmp = btnTxtObj.GetComponent<TextMeshProUGUI>();
+            if (fontAsset != null) btmp.font = fontAsset;
+            btmp.text = "LANJUT";
+            btmp.fontSize = 18;
+            btmp.fontStyle = FontStyles.Bold;
+            btmp.color = Color.white;
+            btmp.alignment = TextAlignmentOptions.Center;
+        }
+
+        if (btnTutupLaporan != null)
+        {
+            btnTutupLaporan.onClick.RemoveListener(TutupLaporanHarian);
+            btnTutupLaporan.onClick.AddListener(TutupLaporanHarian);
+        }
+
+        panelLaporanHarian.SetActive(false);
     }
 
     // --- UPDATE TAMPILAN UI ---
@@ -696,16 +944,26 @@ public class PhoneOjekApp : MonoBehaviour
         }
     }
 
+    // --- PENYIMPANAN DATA ---
+
     void MuatDataKeuangan()
     {
-        saldoAplikasi = PlayerPrefs.GetInt("Ojek_SaldoAplikasi", 0);
-        uangUtamaPlayer = PlayerPrefs.GetInt("Ojek_UangUtamaPlayer", 0);
+        saldoAplikasi = PlayerPrefs.GetInt(KeySaldoAplikasi, 0);
+        uangUtamaPlayer = PlayerPrefs.GetInt(KeyUangUtama, 0);
+        dataSudahDimuat = true;
     }
 
-    void SimpanDataKeuangan()
+    /// <summary>
+    /// Simpan saldo aplikasi dan uang utama ke PlayerPrefs.
+    /// Public supaya skrip lain bisa memanggilnya setelah mengubah uang.
+    /// </summary>
+    public void SimpanDataKeuangan()
     {
-        PlayerPrefs.SetInt("Ojek_SaldoAplikasi", saldoAplikasi);
-        PlayerPrefs.SetInt("Ojek_UangUtamaPlayer", uangUtamaPlayer);
+        // Jangan menyimpan sebelum data lama dimuat, supaya tidak menimpa dengan nilai kosong
+        if (!dataSudahDimuat) return;
+
+        PlayerPrefs.SetInt(KeySaldoAplikasi, saldoAplikasi);
+        PlayerPrefs.SetInt(KeyUangUtama, uangUtamaPlayer);
         PlayerPrefs.Save();
     }
 

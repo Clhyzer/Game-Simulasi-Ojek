@@ -10,7 +10,7 @@ public class NPCSpawner : MonoBehaviour
 
     [Header("Locations")]
     public Transform[] spawnPoints;     // Titik jemput
-    public Transform[] dropOffPoints;   // Titik antar
+    public Transform[] dropOffPoints;   // Titik antar  
 
     private GameObject currentNPC;
     private GameObject currentDropZone;

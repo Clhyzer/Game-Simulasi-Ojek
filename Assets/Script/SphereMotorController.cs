@@ -44,9 +44,40 @@ public class SphereMotorController : MonoBehaviour
     public LayerMask groundLayer;
     public float groundCheckDistance = 0.6f;
 
+    [Header("Engine Sound")]
+    [Tooltip("Clip suara mesin yang bisa di-loop (idle/rpm sedang). Import tanpa jeda di awal/akhir agar loop mulus.")]
+    public AudioClip engineClip;
+
+    [Tooltip("Boleh dikosongkan, akan dibuat otomatis jika tidak ada.")]
+    public AudioSource engineSource;
+
+    [Tooltip("Kecepatan (m/s) yang dianggap sebagai RPM maksimum untuk suara mesin.")]
+    public float maxSpeedForSound = 20f;
+
+    [Tooltip("Pitch saat motor diam (idle).")]
+    public float idlePitch = 0.8f;
+
+    [Tooltip("Pitch saat kecepatan maksimum.")]
+    public float maxPitch = 2.0f;
+
+    [Tooltip("Volume saat motor diam (idle).")]
+    [Range(0f, 1f)] public float idleVolume = 0.3f;
+
+    [Tooltip("Volume saat kecepatan maksimum.")]
+    [Range(0f, 1f)] public float maxVolume = 0.8f;
+
+    [Tooltip("Tambahan pitch saat gas ditekan (efek rpm naik saat tancap gas).")]
+    public float throttlePitchBoost = 0.15f;
+
+    [Tooltip("Seberapa halus perubahan pitch/volume (semakin besar semakin cepat).")]
+    public float soundSmoothing = 5f;
+
     private float moveInput;
     private float turnInput;
     private bool isGrounded;
+
+    private float currentPitch;
+    private float currentVolume;
 
     private void Awake()
     {
@@ -73,6 +104,8 @@ public class SphereMotorController : MonoBehaviour
         sphereRB.constraints =
             RigidbodyConstraints.FreezeRotationX |
             RigidbodyConstraints.FreezeRotationZ;
+
+        SetupEngineSound();
     }
 
     private void Update()
@@ -101,6 +134,8 @@ public class SphereMotorController : MonoBehaviour
         {
             motorModel.rotation = transform.rotation;
         }
+
+        UpdateEngineSound();
     }
 
     private void ReadInput()
@@ -209,6 +244,64 @@ public class SphereMotorController : MonoBehaviour
             velocity.y,
             newVelocity.z
         );
+    }
+
+    // --- ENGINE SOUND ---
+
+    private void SetupEngineSound()
+    {
+        if (engineSource == null)
+        {
+            GameObject sfxObj = new GameObject("EngineSound");
+            sfxObj.transform.SetParent(transform, false);
+            engineSource = sfxObj.AddComponent<AudioSource>();
+        }
+
+        engineSource.clip = engineClip;
+        engineSource.loop = true;
+        engineSource.playOnAwake = false;
+        engineSource.spatialBlend = 0f; // 2D sound
+
+        currentPitch = idlePitch;
+        currentVolume = idleVolume;
+        engineSource.pitch = currentPitch;
+        engineSource.volume = currentVolume;
+
+        if (engineClip != null)
+        {
+            engineSource.Play();
+        }
+    }
+
+    private void UpdateEngineSound()
+    {
+        if (engineSource == null || engineClip == null)
+            return;
+
+        // Kecepatan horizontal bola (abaikan gerakan naik/turun)
+        Vector3 v = sphereRB.linearVelocity;
+        float speed = new Vector2(v.x, v.z).magnitude;
+
+        float speedPercent = Mathf.Clamp01(speed / Mathf.Max(0.1f, maxSpeedForSound));
+
+        // Gas ditekan = rpm naik sedikit, meski kecepatan belum tinggi
+        float throttle = Mathf.Abs(moveInput);
+
+        float targetPitch = Mathf.Lerp(idlePitch, maxPitch, speedPercent)
+                            + throttle * throttlePitchBoost;
+        float targetVolume = Mathf.Lerp(idleVolume, maxVolume, speedPercent);
+
+        float t = soundSmoothing * Time.deltaTime;
+        currentPitch = Mathf.Lerp(currentPitch, targetPitch, t);
+        currentVolume = Mathf.Lerp(currentVolume, targetVolume, t);
+
+        engineSource.pitch = currentPitch;
+        engineSource.volume = currentVolume;
+
+        if (!engineSource.isPlaying)
+        {
+            engineSource.Play();
+        }
     }
 
     /// <summary>
